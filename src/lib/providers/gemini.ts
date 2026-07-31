@@ -362,45 +362,73 @@ async function readSse(
   let buffer = ''
   let full = ''
   let blockedBy = ''
+  let lastReason = ''
+
+  /** Pulls whole events off the buffer. Google delimits with CRLFCRLF, the SSE
+   *  spec allows either, so normalising the line endings up front is what makes
+   *  this work at all — splitting on a bare "\n\n" silently matches nothing in
+   *  a CRLF stream and drops the entire response. */
+  function drain(flush: boolean) {
+    buffer = buffer.replace(/\r\n/g, '\n')
+
+    let cut: number
+    while ((cut = buffer.indexOf('\n\n')) !== -1) {
+      handle(buffer.slice(0, cut))
+      buffer = buffer.slice(cut + 2)
+    }
+    // The final event often arrives without its trailing blank line.
+    if (flush && buffer.trim()) {
+      handle(buffer)
+      buffer = ''
+    }
+  }
+
+  function handle(event: string) {
+    const payload = event
+      .split('\n')
+      .filter((l) => l.startsWith('data:'))
+      .map((l) => l.slice(5).trim())
+      .join('')
+    if (!payload || payload === '[DONE]') return
+
+    try {
+      const json = JSON.parse(payload)
+      const candidate = json?.candidates?.[0]
+      const reason = json?.promptFeedback?.blockReason ?? candidate?.finishReason
+      if (reason) lastReason = reason
+      if (reason === 'SAFETY' || reason === 'PROHIBITED_CONTENT') blockedBy = reason
+
+      for (const part of candidate?.content?.parts ?? []) {
+        // Thinking models emit reasoning as parts flagged `thought`. That is
+        // scratch work, not the answer, and must not reach the transcript.
+        if (part?.thought === true) continue
+        if (typeof part?.text !== 'string' || !part.text) continue
+        full += part.text
+        onDelta?.(part.text)
+      }
+    } catch {
+      // A malformed event is not worth losing the rest of the answer over.
+    }
+  }
 
   try {
     for (;;) {
       const { done, value } = await reader.read()
       if (done) break
       buffer += decoder.decode(value, { stream: true })
-
-      let cut: number
-      while ((cut = buffer.indexOf('\n\n')) !== -1) {
-        const event = buffer.slice(0, cut)
-        buffer = buffer.slice(cut + 2)
-
-        const payload = event
-          .split('\n')
-          .filter((l) => l.startsWith('data:'))
-          .map((l) => l.slice(5).trim())
-          .join('')
-        if (!payload || payload === '[DONE]') continue
-
-        try {
-          const json = JSON.parse(payload)
-          const candidate = json?.candidates?.[0]
-          const reason = json?.promptFeedback?.blockReason ?? candidate?.finishReason
-          if (reason === 'SAFETY' || reason === 'PROHIBITED_CONTENT') blockedBy = reason
-
-          for (const part of candidate?.content?.parts ?? []) {
-            if (typeof part.text !== 'string' || !part.text) continue
-            full += part.text
-            onDelta?.(part.text)
-          }
-        } catch {
-          // A malformed event is not worth losing the rest of the answer over.
-        }
-      }
+      drain(false)
     }
+    buffer += decoder.decode()
+    drain(true)
   } finally {
     reader.cancel().catch(() => {})
   }
 
-  if (!full) throw new GeminiError(blockedBy ? blockMessage(blockedBy) : 'No answer came back.')
-  return full
+  if (full) return full
+  if (blockedBy) throw new GeminiError(blockMessage(blockedBy))
+  if (lastReason === 'MAX_TOKENS')
+    throw new GeminiError('The answer was cut off before any of it arrived. Try a shorter question.')
+  throw new GeminiError(
+    `No answer came back${lastReason ? ` (${lastReason})` : ''}. Retry, or check the model in Settings still supports images.`,
+  )
 }

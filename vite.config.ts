@@ -15,6 +15,10 @@ const httpsDev = process.env.HTTPS === '1'
 
 export default defineConfig({
   base,
+  // Pinned, not default: 5173 is usually taken by a sibling project, and vite
+  // silently walks to the next free port — which moves the LAN URL out from
+  // under any bookmark. strictPort makes a clash fail loudly instead.
+  server: { host: true, port: 5180, strictPort: true },
   // Vite's host check 403s anything but localhost. Tailscale fronts the preview
   // with a real cert on a ts.net name, so let that one family of hosts through.
   preview: { allowedHosts: ['.ts.net'] },
