@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Image Analysis">
+  <rect width="512" height="512" rx="112" fill="#080b11" />
+  <!-- Viewbox frame, like a film on a lightbox -->
+  <rect x="120" y="104" width="272" height="304" rx="20" fill="#0f1620" stroke="#22303f" stroke-width="8" />
+  <!-- Ribs, abstracted -->
+  <g stroke="#4cc9f0" stroke-width="11" stroke-linecap="round" fill="none" opacity="0.85">
+    <path d="M256 168 v192" />
+    <path d="M256 200 C 216 200 186 218 172 244" />
+    <path d="M256 200 C 296 200 326 218 340 244" />
+    <path d="M256 254 C 212 254 180 274 166 302" />
+    <path d="M256 254 C 300 254 332 274 346 302" />
+    <path d="M256 308 C 218 308 190 326 178 350" />
+    <path d="M256 308 C 294 308 322 326 334 350" />
+  </g>
+  <!-- The finding: a marked focus -->
+  <circle cx="318" cy="286" r="30" fill="none" stroke="#f9c74f" stroke-width="10" />
+</svg>

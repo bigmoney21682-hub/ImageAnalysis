@@ -1,0 +1,15 @@
+node_modules
+dist
+dist-ssr
+*.local
+.DS_Store
+.vite
+*.tsbuildinfo
+
+# Never commit a key. The app stores it in localStorage, not in the repo.
+.env
+.env.*
+
+# Never commit patient images. Nothing here should ever hold one.
+samples/
+*.dcm

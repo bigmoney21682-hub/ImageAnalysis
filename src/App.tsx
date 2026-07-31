@@ -1,0 +1,257 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Capture } from './components/Capture'
+import { Chat } from './components/Chat'
+import { Consent } from './components/Consent'
+import { History } from './components/History'
+import { Results } from './components/Results'
+import { Settings } from './components/Settings'
+import { formatBytes, prepareImage, type PreparedImage } from './lib/image'
+import { getProvider } from './lib/providers'
+import {
+  apiKeyStore,
+  consentStore,
+  historyStore,
+  modelStore,
+  providerStore,
+} from './lib/storage'
+import type { Analysis, ChatMessage } from './lib/types'
+
+type Stage = 'idle' | 'preview' | 'analyzing' | 'done'
+
+export default function App() {
+  const [stage, setStage] = useState<Stage>('idle')
+  const [image, setImage] = useState<PreparedImage | null>(null)
+  const [hint, setHint] = useState('')
+  const [analysis, setAnalysis] = useState<Analysis | null>(null)
+  const [chat, setChat] = useState<ChatMessage[]>([])
+  // Which history row the live report was saved as, so follow-ups land on it.
+  const [entryId, setEntryId] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [showSettings, setShowSettings] = useState(false)
+  const [showHistory, setShowHistory] = useState(false)
+  const [consented, setConsented] = useState(() => consentStore.get())
+  const [providerId, setProviderId] = useState(providerStore.get())
+  const [apiKey, setApiKey] = useState(() => apiKeyStore.get(providerStore.get()))
+  const [model, setModel] = useState(() => modelStore.get(providerStore.get()))
+
+  const abortRef = useRef<AbortController | null>(null)
+  // Held separately so we can revoke the previous preview when a new one lands.
+  const previewRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (previewRef.current) URL.revokeObjectURL(previewRef.current)
+      abortRef.current?.abort()
+    }
+  }, [])
+
+  const pick = useCallback(async (file: File) => {
+    setError(null)
+    try {
+      const prepared = await prepareImage(file)
+      if (previewRef.current) URL.revokeObjectURL(previewRef.current)
+      previewRef.current = prepared.previewUrl
+      setImage(prepared)
+      setAnalysis(null)
+      setChat([])
+      setEntryId(null)
+      setStage('preview')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not read that image.')
+    }
+  }, [])
+
+  const analyze = useCallback(async () => {
+    if (!image) return
+    const provider = getProvider(providerId)
+
+    if (provider.needsKey && !apiKey) {
+      setError('Add an API key in Settings first, or switch to Demo mode to see how it works.')
+      setShowSettings(true)
+      return
+    }
+
+    const controller = new AbortController()
+    abortRef.current = controller
+    setStage('analyzing')
+    setError(null)
+
+    try {
+      const result = await provider.analyze(
+        { imageBase64: image.base64, mimeType: image.mimeType, hint },
+        { apiKey, model, signal: controller.signal },
+      )
+      setAnalysis(result)
+      setChat([])
+      const entry = historyStore.add({
+        analysis: result,
+        provider: providerId,
+        model: model || provider.defaultModel,
+        hint,
+        thumbnail: image.thumbnail,
+      })
+      setEntryId(entry.id)
+      setStage('done')
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        setStage('preview')
+        return
+      }
+      setError(e instanceof Error ? e.message : 'Something went wrong while reading the image.')
+      setStage('preview')
+    } finally {
+      abortRef.current = null
+    }
+  }, [image, providerId, apiKey, model, hint])
+
+  /** Keeps the live transcript and its saved copy in step. */
+  const updateChat = useCallback(
+    (messages: ChatMessage[]) => {
+      setChat(messages)
+      if (entryId) historyStore.setChat(entryId, messages)
+    },
+    [entryId],
+  )
+
+  const reset = useCallback(() => {
+    abortRef.current?.abort()
+    if (previewRef.current) URL.revokeObjectURL(previewRef.current)
+    previewRef.current = null
+    setImage(null)
+    setAnalysis(null)
+    setChat([])
+    setEntryId(null)
+    setHint('')
+    setError(null)
+    setStage('idle')
+    setShowHistory(false)
+  }, [])
+
+  return (
+    <div className="app">
+      <nav className="topbar">
+        <button className="topbar__brand" onClick={reset}>
+          Image Analysis
+        </button>
+        <div className="topbar__actions">
+          <button
+            className={`btn btn--icon${showHistory ? ' btn--icon-on' : ''}`}
+            onClick={() => setShowHistory((v) => !v)}
+            aria-label="Saved reports"
+            aria-pressed={showHistory}
+          >
+            🕘
+          </button>
+          <button
+            className="btn btn--icon"
+            onClick={() => setShowSettings(true)}
+            aria-label="Settings"
+          >
+            ⚙
+          </button>
+        </div>
+      </nav>
+
+      <main className="main">
+        {showHistory && (
+          <History
+            onClose={() => setShowHistory(false)}
+            providerId={providerId}
+            apiKey={apiKey}
+            model={model}
+          />
+        )}
+
+        {/* Kept mounted behind the history view so an in-flight analysis, the
+            chosen image and any error all survive a look at the history. */}
+        <div hidden={showHistory}>
+          {error && (
+            <div className="alert" role="alert">
+              {error}
+            </div>
+          )}
+
+          {stage === 'idle' && <Capture onPick={pick} />}
+
+          {(stage === 'preview' || stage === 'analyzing') && image && (
+            <div className="preview">
+              <img className="preview__img" src={image.previewUrl} alt="The image you uploaded" />
+              <p className="preview__meta">
+                {image.width} × {image.height} · {formatBytes(image.bytes)}
+                {image.lossless ? ' · sent losslessly' : ' · re-encoded to JPEG'}
+              </p>
+
+              {stage === 'preview' ? (
+                <>
+                  <label className="field">
+                    <span className="field__label">Clinical context (optional)</span>
+                    <input
+                      type="text"
+                      value={hint}
+                      onChange={(e) => setHint(e.target.value)}
+                      placeholder="e.g. 58M, pleuritic chest pain, 3 days"
+                    />
+                    <span className="field__help">
+                      Age, symptoms and the reason for the study sharpen the differential. No
+                      names or record numbers.
+                    </span>
+                  </label>
+                  <button className="btn btn--primary btn--wide" onClick={analyze}>
+                    Analyze this image
+                  </button>
+                  <button className="btn btn--ghost btn--wide" onClick={reset}>
+                    Choose a different image
+                  </button>
+                </>
+              ) : (
+                <div className="working">
+                  <div className="scanline" aria-hidden="true" />
+                  <p>Reading the image…</p>
+                  <button className="btn btn--ghost" onClick={() => abortRef.current?.abort()}>
+                    Cancel
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {stage === 'done' && analysis && (
+            <Results analysis={analysis} imageUrl={image?.previewUrl} onReset={reset}>
+              <Chat
+                image={image ? { base64: image.base64, mimeType: image.mimeType } : null}
+                analysis={analysis}
+                hint={hint}
+                providerId={providerId}
+                apiKey={apiKey}
+                model={model}
+                messages={chat}
+                onChange={updateChat}
+              />
+            </Results>
+          )}
+        </div>
+      </main>
+
+      {!consented && (
+        <Consent
+          onAccept={() => {
+            consentStore.set(true)
+            setConsented(true)
+          }}
+        />
+      )}
+
+      {showSettings && (
+        <Settings
+          onClose={() => setShowSettings(false)}
+          onChange={(p, k, m) => {
+            setProviderId(p)
+            setApiKey(k)
+            setModel(m)
+            setError(null)
+          }}
+        />
+      )}
+    </div>
+  )
+}
