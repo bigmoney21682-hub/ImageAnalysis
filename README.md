@@ -100,10 +100,13 @@ against the 512px thumbnail, and the UI says so — fine detail may not survive 
 
 ## Privacy
 
-The image goes from your browser straight to Google, using your key. It does not pass
-through whatever host is serving this app. That's a deliberate consequence of having no
-backend: swap in a provider without CORS support and you'd need a proxy, and that proxy
-would see every image.
+By default the image goes from your browser straight to Google, using your key. It does
+not pass through whatever host is serving this app. That's a deliberate consequence of
+having no backend.
+
+Configuring a proxy (see below) knowingly gives that up: the proxy holds the key, and
+every image travels through whoever runs it. Leave the Proxy URL blank and nothing
+changes.
 
 Two things worth knowing before uploading anything real:
 
@@ -127,3 +130,15 @@ domain or a user site? Build with `BASE_PATH=/`.
 The API key is never in the build — it's typed in at runtime and stored locally. But
 because this is a static site, anything running in the browser can read it. Restrict
 the key by HTTP referrer in the Google console, and rotate it if you share the device.
+
+**Do not try to bake a key into the build.** A `.env` file keeps the key out of git, but
+Vite substitutes `import.meta.env.VITE_*` values into the JavaScript at build time, so
+the key ships inside `dist/assets/*.js` for anyone to read. There is no build-time
+mechanism that avoids this, because a static site has no server to keep a secret on.
+Google's secret scanning will likely revoke such a key on its own.
+
+### Sharing a link without handing out keys
+
+`worker/` is an optional Cloudflare Worker that holds one key server-side and gates
+access with a passphrase. Deploy it, then set **Settings → Proxy URL**. See
+[worker/README.md](worker/README.md) — including what it costs you in privacy.

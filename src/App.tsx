@@ -7,6 +7,7 @@ import { Results } from './components/Results'
 import { Settings } from './components/Settings'
 import { formatBytes, prepareImage, type PreparedImage } from './lib/image'
 import { getProvider } from './lib/providers'
+import { usingProxy } from './lib/proxy'
 import {
   apiKeyStore,
   consentStore,
@@ -65,7 +66,8 @@ export default function App() {
     if (!image) return
     const provider = getProvider(providerId)
 
-    if (provider.needsKey && !apiKey) {
+    // A configured proxy carries the key, so this browser legitimately has none.
+    if (provider.needsKey && !apiKey && !usingProxy()) {
       setError('Add an API key in Settings first, or switch to Demo mode to see how it works.')
       setShowSettings(true)
       return
