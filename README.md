@@ -36,10 +36,25 @@ npm run dev
 ```
 
 Open Settings, paste a Gemini key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey),
-hit **Test key & list models**, Save.
+hit **Test key & list models**, Save. Your key is always tried first, and no image
+leaves the browser except to Google while it is working.
 
-No key handy? Switch the provider to **Demo** — a full sample report, including a
-working follow-up conversation, with no network round trip.
+No key handy? The deployed app falls back to a **shared service** — a pool of keys held
+by a Cloudflare Worker, rate limited per IP. Or switch the provider to **Demo** for a
+full sample report, including a working follow-up conversation, with no network round
+trip at all.
+
+A request falls back on three axes, because they fail for unrelated reasons:
+
+| Level | Tries, in order | Fixes |
+| --- | --- | --- |
+| Vendor | Gemini → Groq | a vendor having an afternoon |
+| Credential | your key → your proxy → shared service | a spent daily quota |
+| Model | your choice → next best your key can reach | a retired or rate-limited model |
+
+Capped at 7 upstream calls per analysis, so a bad day is an error rather than a long
+silence. It never falls back to Demo — a report always comes from a real model, and a
+banner names it when it was not the one you picked.
 
 | Script | What it does |
 | --- | --- |
@@ -59,7 +74,8 @@ src/
     Results.tsx           the report; artifacts and findings rendered apart
     Chat.tsx              streaming follow-up questions
     History.tsx           saved reports, each with its conversation
-    Settings.tsx          provider, key, model
+    Settings.tsx          provider, key, model, proxy, shared service
+    Quota.tsx             what is left of the shared daily allowance
     Consent.tsx           the one-time "before you start"
   lib/
     prompt.ts             ← the actual quality of the app lives here
@@ -69,8 +85,12 @@ src/
     apikey.ts             catches dirty pasted keys before Google rejects them
     providers/
       gemini.ts           structured output + SSE streaming chat
+      groq.ts             second vendor, OpenAI-compatible, proxy-only
       mock.ts             sample report, no key needed
-      index.ts            registry + model ranking
+      index.ts            registry + the vendor-level fallback
+      rank.ts             model ranking, shared with the fallback chain
+      fallback.ts         retry across models, then across credentials
+    proxy.ts              credential chain + shared-allowance store
 ```
 
 ## Notes on the implementation
@@ -81,10 +101,18 @@ are capped at 2048px on the long edge at quality 0.95, and a lossless PNG or Web
 enough to send is passed through untouched. The preview line tells you which happened.
 
 **Model choice is ranked for acuity, not throughput.** `scoreModel` in
-`providers/index.ts` puts Pro above Flash and penalises Lite variants heavily — subtle
+`providers/rank.ts` puts Pro above Flash and penalises Lite variants heavily — subtle
 low-contrast findings are exactly what a smaller model drops. Model IDs get retired
 without notice, so Settings lists what *your key* can actually reach rather than
 trusting a hardcoded default.
+
+**Nothing in the path is assumed to work.** A retired model, a spent daily quota or a
+disabled project used to be a dead end the user could only clear by guessing at
+Settings. Now `providers/fallback.ts` walks down that same ranking — up to five models,
+then on to the next credential — and the report says which model actually wrote it when
+it was not the one you asked for. Only faults another model could plausibly fix are
+retried: a bad key or a safety block fails on the first request, because spending four
+more to prove it just makes the error slower.
 
 **Safety thresholds are set to `BLOCK_ONLY_HIGH`.** Clinical images — wounds, exposed
 anatomy, anything dermatological — trip a general-purpose filter constantly. If one is
@@ -100,13 +128,18 @@ against the 512px thumbnail, and the UI says so — fine detail may not survive 
 
 ## Privacy
 
-By default the image goes from your browser straight to Google, using your key. It does
-not pass through whatever host is serving this app. That's a deliberate consequence of
-having no backend.
+**With your own key**, the image goes from your browser straight to Google. It does not
+pass through whatever host is serving this app. That's a deliberate consequence of
+having no backend, and it is the first thing the app tries.
 
-Configuring a proxy (see below) knowingly gives that up: the proxy holds the key, and
-every image travels through whoever runs it. Leave the Proxy URL blank and nothing
-changes.
+**Without one**, the shared service serves the request: a Cloudflare Worker holding a
+pool of keys the app's owner pays for, rate limited per IP, with every image travelling
+through their Cloudflare account on the way to Google. Untick **Use the shared service**
+in Settings to remove it from the chain and guarantee nothing leaves the browser except
+to Google. See `worker/README.md` to run your own.
+
+Your key is used first and the shared pool only picks up when yours is exhausted, so
+adding a key both overrides the shared one and extends it.
 
 Two things worth knowing before uploading anything real:
 
