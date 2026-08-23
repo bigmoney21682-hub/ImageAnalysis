@@ -100,11 +100,15 @@ an imaging artifact, and the app would then be reporting on damage it caused. Up
 are capped at 2048px on the long edge at quality 0.95, and a lossless PNG or WebP small
 enough to send is passed through untouched. The preview line tells you which happened.
 
-**Model choice is ranked for acuity, not throughput.** `scoreModel` in
-`providers/rank.ts` puts Pro above Flash and penalises Lite variants heavily — subtle
-low-contrast findings are exactly what a smaller model drops. Model IDs get retired
-without notice, so Settings lists what *your key* can actually reach rather than
-trusting a hardcoded default.
+**Model choice is ranked for a free key that answers.** `scoreModel` in
+`providers/rank.ts` puts Flash above Pro and penalises Lite variants heavily. Pro reads
+faint low-contrast detail better and would be the right default on a paid key, but on
+the free tier it is rate limited hard enough to usually return 429 — and a failed
+attempt still costs a request against the shared daily allowance, so leading with Pro
+spent two units per report. Pro sits one place down, which is where the fallback chain
+looks next, and stays selectable outright. Model IDs get retired without notice, so
+Settings lists what *your key* can actually reach rather than trusting a hardcoded
+default.
 
 **Nothing in the path is assumed to work.** A retired model, a spent daily quota or a
 disabled project used to be a dead end the user could only clear by guessing at
